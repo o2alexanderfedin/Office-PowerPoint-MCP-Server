@@ -698,6 +698,449 @@ def set_core_properties(presentation: Presentation, title: str = None, subject: 
     if comments is not None:
         core_props.comments = comments
 
+
+# ---- Text Extraction Functions ----
+
+def extract_all_text_from_slide(slide) -> Dict[str, Any]:
+    """
+    Extract all text content from a slide.
+    
+    Args:
+        slide: The slide object
+        
+    Returns:
+        Dictionary containing all text elements with their metadata
+    """
+    text_elements = []
+    all_shapes_debug = []
+    
+    # Extract text from all shapes
+    for shape_idx, shape in enumerate(slide.shapes):
+        text_data = extract_text_from_shape(shape, shape_idx)
+        if text_data:
+            # Always include for debugging, but separate text vs non-text
+            if text_data.get("text_content"):
+                text_elements.append(text_data)
+            all_shapes_debug.append({
+                "shape_index": shape_idx,
+                "shape_name": shape.name,
+                "shape_type": str(shape.shape_type),
+                "has_text": bool(text_data.get("text_content")),
+                "debug_info": text_data.get("debug_info", [])
+            })
+    
+    return {
+        "slide_index": slide.slide_id - 1 if hasattr(slide, 'slide_id') else 0,
+        "text_elements": text_elements,
+        "total_text_elements": len(text_elements),
+        "total_shapes": len(slide.shapes),
+        "shapes_debug": all_shapes_debug
+    }
+
+
+def extract_text_from_shape(shape, shape_idx: int) -> Optional[Dict[str, Any]]:
+    """
+    Extract text from a shape.
+    
+    Args:
+        shape: The shape object
+        shape_idx: Index of the shape
+        
+    Returns:
+        Dictionary with text data or None if no text
+    """
+    text_data = {
+        "shape_index": shape_idx,
+        "shape_name": shape.name,
+        "shape_type": str(shape.shape_type),
+        "text_content": None,
+        "placeholder_type": None,
+        "placeholder_idx": None,
+        "debug_info": []
+    }
+    
+    try:
+        # Check if it's a placeholder first
+        if hasattr(shape, 'placeholder_format'):
+            text_data["placeholder_type"] = shape.placeholder_format.type
+            text_data["placeholder_idx"] = shape.placeholder_format.idx
+            text_data["debug_info"].append(f"Placeholder type: {shape.placeholder_format.type}")
+        
+        # Try multiple approaches to extract text
+        text_found = False
+        
+        # Method 1: text_frame property (for ALL shapes with text_frame, not just placeholders)
+        if hasattr(shape, 'text_frame') and shape.text_frame is not None:
+            try:
+                text_data["debug_info"].append("Found text_frame, attempting extraction")
+                
+                # First try the simple approach
+                full_text = shape.text_frame.text
+                if full_text and full_text.strip():
+                    text_data["text_content"] = full_text
+                    text_found = True
+                    text_data["debug_info"].append(f"Found via text_frame.text: '{full_text[:50]}...'")
+                else:
+                    text_data["debug_info"].append("text_frame.text is empty, trying paragraph/run extraction")
+                    
+                    # If text_frame.text is empty, try extracting from paragraphs directly
+                    paragraph_texts = []
+                    for i, para in enumerate(shape.text_frame.paragraphs):
+                        if para.text and para.text.strip():
+                            paragraph_texts.append(para.text)
+                            text_data["debug_info"].append(f"Para {i}: '{para.text[:30]}...'")
+                        else:
+                            # If paragraph.text is empty, try extracting from runs
+                            run_texts = []
+                            for j, run in enumerate(para.runs):
+                                if run.text and run.text.strip():
+                                    run_texts.append(run.text)
+                                    text_data["debug_info"].append(f"Para {i} Run {j}: '{run.text[:30]}...'")
+                            if run_texts:
+                                paragraph_texts.append("".join(run_texts))
+                    
+                    if paragraph_texts:
+                        text_data["text_content"] = "\n".join(paragraph_texts)
+                        text_found = True
+                        text_data["debug_info"].append(f"Found via paragraphs/runs extraction ({len(paragraph_texts)} paragraphs)")
+                    else:
+                        text_data["debug_info"].append(f"No text found in {len(shape.text_frame.paragraphs)} paragraphs")
+                
+                if text_found:
+                    # Get detailed paragraph structure
+                    paragraphs = []
+                    for para in shape.text_frame.paragraphs:
+                        para_data = {
+                            "text": para.text,
+                            "runs": []
+                        }
+                        for run in para.runs:
+                            run_data = {
+                                "text": run.text,
+                                "font_name": run.font.name if run.font.name else None,
+                                "font_size": run.font.size.pt if run.font.size else None,
+                                "bold": run.font.bold,
+                                "italic": run.font.italic
+                            }
+                            para_data["runs"].append(run_data)
+                        paragraphs.append(para_data)
+                    
+                    text_data["paragraphs"] = paragraphs
+                    
+            except Exception as e:
+                text_data["debug_info"].append(f"text_frame access failed: {str(e)}")
+        
+        # Method 2: direct text property
+        if not text_found and hasattr(shape, 'text'):
+            try:
+                if shape.text and shape.text.strip():
+                    text_data["text_content"] = shape.text
+                    text_found = True
+                    text_data["debug_info"].append("Found via direct text property")
+            except:
+                text_data["debug_info"].append("direct text access failed")
+        
+        # Method 3: Handle tables
+        if not text_found and hasattr(shape, 'table'):
+            try:
+                table_text = extract_table_text(shape.table)
+                if table_text:
+                    text_data["text_content"] = table_text
+                    text_data["shape_type"] = "TABLE"
+                    text_found = True
+                    text_data["debug_info"].append("Found table text")
+            except:
+                text_data["debug_info"].append("table text extraction failed")
+        
+        # Method 4: Handle grouped shapes
+        if not text_found and hasattr(shape, 'shapes'):
+            try:
+                group_texts = []
+                for sub_shape in shape.shapes:
+                    sub_text = extract_text_from_shape(sub_shape, -1)
+                    if sub_text and sub_text["text_content"]:
+                        group_texts.append(sub_text["text_content"])
+                
+                if group_texts:
+                    text_data["text_content"] = "\n".join(group_texts)
+                    text_data["shape_type"] = "GROUP"
+                    text_found = True
+                    text_data["debug_info"].append(f"Found grouped text from {len(group_texts)} sub-shapes")
+            except:
+                text_data["debug_info"].append("grouped shapes extraction failed")
+        
+        # Method 5: Raw inspection of shape internals (for debugging)
+        if not text_found:
+            try:
+                # Check if shape has any text-related attributes
+                text_attrs = []
+                for attr in dir(shape):
+                    if 'text' in attr.lower() and not attr.startswith('_'):
+                        try:
+                            value = getattr(shape, attr)
+                            if value and str(value).strip():
+                                text_attrs.append(f"{attr}: {str(value)[:100]}")
+                        except:
+                            pass
+                
+                if text_attrs:
+                    text_data["debug_info"].append(f"Text attributes found: {', '.join(text_attrs)}")
+                
+                # For TextBox shapes specifically, try alternate approaches
+                if 'textbox' in shape.name.lower():
+                    text_data["debug_info"].append("This is a TextBox shape - checking alternate access methods")
+                    
+                    # Try accessing internal structure
+                    if hasattr(shape, '_element'):
+                        text_data["debug_info"].append("Shape has _element attribute")
+                        # Add more specific TextBox handling here if needed
+                
+            except Exception as e:
+                text_data["debug_info"].append(f"Raw inspection failed: {str(e)}")
+        
+        # Always return shape info for debugging, even if no text found
+        if text_found:
+            return text_data
+        else:
+            # Return debug info even for shapes without text
+            text_data["debug_info"].append("No text content found after all methods")
+            return text_data if text_data["debug_info"] else None
+            
+    except Exception as e:
+        text_data["debug_info"].append(f"Exception: {str(e)}")
+        return text_data
+    
+    return None
+
+
+def extract_table_text(table) -> Optional[str]:
+    """
+    Extract text from a table.
+    
+    Args:
+        table: The table object
+        
+    Returns:
+        Formatted string with table content
+    """
+    try:
+        table_rows = []
+        for row in table.rows:
+            row_cells = []
+            for cell in row.cells:
+                cell_text = cell.text_frame.text if cell.text_frame else ""
+                row_cells.append(cell_text.strip())
+            if any(row_cells):  # Only add non-empty rows
+                table_rows.append(" | ".join(row_cells))
+        
+        return "\n".join(table_rows) if table_rows else None
+    except:
+        return None
+
+
+def replace_text_in_shape(shape, old_text: str, new_text: str, replace_all: bool = False) -> bool:
+    """
+    Replace text in a shape.
+    
+    Args:
+        shape: The shape object
+        old_text: Text to replace
+        new_text: Replacement text
+        replace_all: Whether to replace all occurrences
+        
+    Returns:
+        True if replacement was made, False otherwise
+    """
+    try:
+        if hasattr(shape, 'text_frame') and shape.text_frame:
+            current_text = shape.text_frame.text
+            if old_text in current_text:
+                if replace_all:
+                    new_content = current_text.replace(old_text, new_text)
+                else:
+                    new_content = current_text.replace(old_text, new_text, 1)
+                
+                # Clear existing text and set new content
+                shape.text_frame.clear()
+                shape.text_frame.text = new_content
+                return True
+        
+        elif hasattr(shape, 'text'):
+            current_text = shape.text
+            if old_text in current_text:
+                if replace_all:
+                    shape.text = current_text.replace(old_text, new_text)
+                else:
+                    shape.text = current_text.replace(old_text, new_text, 1)
+                return True
+        
+        # Handle tables
+        elif hasattr(shape, 'table'):
+            return replace_text_in_table(shape.table, old_text, new_text, replace_all)
+            
+    except Exception as e:
+        pass
+    
+    return False
+
+
+def replace_text_in_table(table, old_text: str, new_text: str, replace_all: bool = False) -> bool:
+    """
+    Replace text in a table.
+    
+    Args:
+        table: The table object
+        old_text: Text to replace
+        new_text: Replacement text
+        replace_all: Whether to replace all occurrences
+        
+    Returns:
+        True if any replacement was made, False otherwise
+    """
+    replaced = False
+    try:
+        for row in table.rows:
+            for cell in row.cells:
+                if cell.text_frame:
+                    current_text = cell.text_frame.text
+                    if old_text in current_text:
+                        if replace_all:
+                            new_content = current_text.replace(old_text, new_text)
+                        else:
+                            new_content = current_text.replace(old_text, new_text, 1)
+                        
+                        cell.text_frame.clear()
+                        cell.text_frame.text = new_content
+                        replaced = True
+                        
+                        if not replace_all:
+                            return True
+    except:
+        pass
+    
+    return replaced
+
+
+def translate_element_with_context(slide, element_index: int, target_language: str = "Belarusian") -> Dict[str, Any]:
+    """
+    Translate a single text element with full slide context for precision.
+    
+    Args:
+        slide: The slide object
+        element_index: Index of the specific element to translate
+        target_language: Target language for translation
+        
+    Returns:
+        Dictionary with translation results for this element
+    """
+    # Extract all slide text for context
+    slide_context = extract_all_text_from_slide(slide)
+    all_slide_text = []
+    
+    for element in slide_context["text_elements"]:
+        all_slide_text.append(f"Element {element['shape_index']}: {element['text_content']}")
+    
+    slide_context_text = "\n".join(all_slide_text)
+    
+    # Find the specific element to translate
+    target_element = None
+    for element in slide_context["text_elements"]:
+        if element["shape_index"] == element_index:
+            target_element = element
+            break
+    
+    if not target_element:
+        return {"error": f"Element {element_index} not found or has no text"}
+    
+    return {
+        "element_index": element_index,
+        "original_text": target_element["text_content"],
+        "slide_context": slide_context_text,
+        "element_info": {
+            "shape_name": target_element["shape_name"],
+            "shape_type": target_element["shape_type"],
+            "placeholder_type": target_element.get("placeholder_type"),
+            "placeholder_idx": target_element.get("placeholder_idx")
+        },
+        "ready_for_translation": True
+    }
+
+
+def apply_translation_to_element(slide, element_index: int, translated_text: str) -> Dict[str, Any]:
+    """
+    Apply translation to a specific element on a slide.
+    
+    Args:
+        slide: The slide object
+        element_index: Index of the element to update
+        translated_text: The translated text to apply
+        
+    Returns:
+        Dictionary with application results
+    """
+    try:
+        # Find the shape at the specified index
+        if element_index >= len(slide.shapes):
+            return {"error": f"Element index {element_index} out of range. Slide has {len(slide.shapes)} shapes."}
+        
+        shape = slide.shapes[element_index]
+        
+        # Apply the translation
+        success = replace_text_in_shape(shape, shape.text_frame.text if hasattr(shape, 'text_frame') and shape.text_frame else "", translated_text, replace_all=True)
+        
+        if success:
+            return {
+                "success": True,
+                "element_index": element_index,
+                "shape_name": shape.name,
+                "applied_text": translated_text
+            }
+        else:
+            return {"error": f"Failed to apply translation to element {element_index}"}
+            
+    except Exception as e:
+        return {"error": f"Exception applying translation: {str(e)}"}
+
+
+def translate_slide_text(slide, translation_map: Dict[str, str], replace_all: bool = False) -> Dict[str, Any]:
+    """
+    Translate text in a slide using a translation map.
+    
+    Args:
+        slide: The slide object
+        translation_map: Dictionary mapping original text to translated text
+        replace_all: Whether to replace all occurrences of each text
+        
+    Returns:
+        Dictionary with translation results
+    """
+    results = {
+        "translations_applied": 0,
+        "shapes_modified": 0,
+        "translation_details": []
+    }
+    
+    for shape_idx, shape in enumerate(slide.shapes):
+        shape_modified = False
+        shape_translations = []
+        
+        for original_text, translated_text in translation_map.items():
+            if replace_text_in_shape(shape, original_text, translated_text, replace_all):
+                shape_modified = True
+                shape_translations.append({
+                    "original": original_text,
+                    "translated": translated_text,
+                    "shape_index": shape_idx,
+                    "shape_name": shape.name
+                })
+                results["translations_applied"] += 1
+        
+        if shape_modified:
+            results["shapes_modified"] += 1
+            results["translation_details"].extend(shape_translations)
+    
+    return results
+
 def get_core_properties(presentation: Presentation) -> Dict:
     """
     Get core document properties.

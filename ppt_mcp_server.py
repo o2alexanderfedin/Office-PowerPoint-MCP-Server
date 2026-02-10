@@ -1160,6 +1160,414 @@ def add_chart(
             "error": f"Failed to add chart: {str(e)}"
         }
 
+# ---- Text Extraction and Transformation Tools ----
+
+@app.tool()
+def extract_slide_text(
+    slide_index: int,
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """Extract all text content from a slide."""
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    # Check if slide index is valid
+    if slide_index < 0 or slide_index >= len(pres.slides):
+        return {
+            "error": f"Invalid slide index: {slide_index}. Available slides: 0-{len(pres.slides) - 1}"
+        }
+    
+    slide = pres.slides[slide_index]
+    
+    try:
+        text_data = ppt_utils.extract_all_text_from_slide(slide)
+        text_data["slide_index"] = slide_index
+        return {
+            "message": f"Extracted text from slide {slide_index}",
+            **text_data
+        }
+    except Exception as e:
+        return {
+            "error": f"Failed to extract text from slide {slide_index}: {str(e)}"
+        }
+
+
+@app.tool()
+def extract_all_presentation_text(
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """Extract all text content from all slides in the presentation."""
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    try:
+        all_slides_text = []
+        total_text_elements = 0
+        
+        for slide_idx, slide in enumerate(pres.slides):
+            slide_text_data = ppt_utils.extract_all_text_from_slide(slide)
+            slide_text_data["slide_index"] = slide_idx
+            all_slides_text.append(slide_text_data)
+            total_text_elements += slide_text_data["total_text_elements"]
+        
+        return {
+            "message": f"Extracted text from all {len(pres.slides)} slides",
+            "presentation_id": pres_id,
+            "total_slides": len(pres.slides),
+            "total_text_elements": total_text_elements,
+            "slides": all_slides_text
+        }
+    except Exception as e:
+        return {
+            "error": f"Failed to extract text from presentation: {str(e)}"
+        }
+
+
+@app.tool()
+def replace_text_in_slide(
+    slide_index: int,
+    old_text: str,
+    new_text: str,
+    replace_all: bool = False,
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """Replace text in a specific slide."""
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    # Check if slide index is valid
+    if slide_index < 0 or slide_index >= len(pres.slides):
+        return {
+            "error": f"Invalid slide index: {slide_index}. Available slides: 0-{len(pres.slides) - 1}"
+        }
+    
+    slide = pres.slides[slide_index]
+    
+    try:
+        replacements_made = 0
+        shapes_modified = 0
+        
+        for shape in slide.shapes:
+            if ppt_utils.replace_text_in_shape(shape, old_text, new_text, replace_all):
+                replacements_made += 1
+                shapes_modified += 1
+        
+        if replacements_made > 0:
+            return {
+                "message": f"Successfully replaced text in slide {slide_index}",
+                "slide_index": slide_index,
+                "replacements_made": replacements_made,
+                "shapes_modified": shapes_modified,
+                "old_text": old_text,
+                "new_text": new_text,
+                "replace_all": replace_all
+            }
+        else:
+            return {
+                "message": f"No occurrences of '{old_text}' found in slide {slide_index}",
+                "slide_index": slide_index,
+                "replacements_made": 0,
+                "shapes_modified": 0
+            }
+    except Exception as e:
+        return {
+            "error": f"Failed to replace text in slide {slide_index}: {str(e)}"
+        }
+
+
+@app.tool()
+def translate_slide(
+    slide_index: int,
+    translation_map: Dict[str, str],
+    replace_all: bool = False,
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """Translate text in a slide using a translation map."""
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    # Check if slide index is valid
+    if slide_index < 0 or slide_index >= len(pres.slides):
+        return {
+            "error": f"Invalid slide index: {slide_index}. Available slides: 0-{len(pres.slides) - 1}"
+        }
+    
+    slide = pres.slides[slide_index]
+    
+    try:
+        results = ppt_utils.translate_slide_text(slide, translation_map, replace_all)
+        
+        return {
+            "message": f"Translation completed for slide {slide_index}",
+            "slide_index": slide_index,
+            "translation_count": len(translation_map),
+            **results
+        }
+    except Exception as e:
+        return {
+            "error": f"Failed to translate slide {slide_index}: {str(e)}"
+        }
+
+
+@app.tool()
+def translate_entire_presentation(
+    translation_map: Dict[str, str],
+    replace_all: bool = False,
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """Translate text in the entire presentation using a translation map."""
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    try:
+        total_translations = 0
+        total_shapes_modified = 0
+        slide_results = []
+        
+        for slide_idx, slide in enumerate(pres.slides):
+            slide_results_data = ppt_utils.translate_slide_text(slide, translation_map, replace_all)
+            slide_results.append({
+                "slide_index": slide_idx,
+                **slide_results_data
+            })
+            total_translations += slide_results_data["translations_applied"]
+            total_shapes_modified += slide_results_data["shapes_modified"]
+        
+        return {
+            "message": f"Translation completed for entire presentation ({len(pres.slides)} slides)",
+            "presentation_id": pres_id,
+            "total_slides": len(pres.slides),
+            "translation_count": len(translation_map),
+            "total_translations_applied": total_translations,
+            "total_shapes_modified": total_shapes_modified,
+            "slide_results": slide_results
+        }
+    except Exception as e:
+        return {
+            "error": f"Failed to translate presentation: {str(e)}"
+        }
+
+
+@app.tool()
+def batch_replace_text(
+    replacements: List[Dict[str, str]],
+    replace_all: bool = False,
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """Perform batch text replacements across the entire presentation.
+    
+    Args:
+        replacements: List of dictionaries with 'old_text' and 'new_text' keys
+        replace_all: Whether to replace all occurrences of each text
+        presentation_id: ID of the presentation to use
+    """
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    try:
+        # Convert list of replacements to translation map
+        translation_map = {}
+        for replacement in replacements:
+            if 'old_text' in replacement and 'new_text' in replacement:
+                translation_map[replacement['old_text']] = replacement['new_text']
+            else:
+                return {
+                    "error": "Each replacement must have 'old_text' and 'new_text' keys"
+                }
+        
+        # Use the existing translate_entire_presentation logic
+        total_translations = 0
+        total_shapes_modified = 0
+        slide_results = []
+        
+        for slide_idx, slide in enumerate(pres.slides):
+            slide_results_data = ppt_utils.translate_slide_text(slide, translation_map, replace_all)
+            slide_results.append({
+                "slide_index": slide_idx,
+                **slide_results_data
+            })
+            total_translations += slide_results_data["translations_applied"]
+            total_shapes_modified += slide_results_data["shapes_modified"]
+        
+        return {
+            "message": f"Batch replacement completed for entire presentation ({len(pres.slides)} slides)",
+            "presentation_id": pres_id,
+            "total_slides": len(pres.slides),
+            "replacement_count": len(translation_map),
+            "total_replacements_applied": total_translations,
+            "total_shapes_modified": total_shapes_modified,
+            "slide_results": slide_results
+        }
+    except Exception as e:
+        return {
+            "error": f"Failed to perform batch replacement: {str(e)}"
+        }
+
+
+# ---- Precision Translation Tools ----
+
+@app.tool()
+def get_element_for_translation(
+    slide_index: int,
+    element_index: int,
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """Get a specific text element with full slide context for precise translation."""
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    # Check if slide index is valid
+    if slide_index < 0 or slide_index >= len(pres.slides):
+        return {
+            "error": f"Invalid slide index: {slide_index}. Available slides: 0-{len(pres.slides) - 1}"
+        }
+    
+    slide = pres.slides[slide_index]
+    
+    try:
+        result = ppt_utils.translate_element_with_context(slide, element_index, "Belarusian")
+        result["slide_index"] = slide_index
+        return result
+    except Exception as e:
+        return {
+            "error": f"Failed to get element for translation: {str(e)}"
+        }
+
+
+@app.tool()
+def apply_element_translation(
+    slide_index: int,
+    element_index: int,
+    translated_text: str,
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """Apply a precise translation to a specific element."""
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    # Check if slide index is valid
+    if slide_index < 0 or slide_index >= len(pres.slides):
+        return {
+            "error": f"Invalid slide index: {slide_index}. Available slides: 0-{len(pres.slides) - 1}"
+        }
+    
+    slide = pres.slides[slide_index]
+    
+    try:
+        result = ppt_utils.apply_translation_to_element(slide, element_index, translated_text)
+        result["slide_index"] = slide_index
+        return result
+    except Exception as e:
+        return {
+            "error": f"Failed to apply element translation: {str(e)}"
+        }
+
+
+@app.tool()
+def list_slide_elements_for_translation(
+    slide_index: int,
+    presentation_id: Optional[str] = None
+) -> Dict:
+    """List all translatable elements on a slide with their current text."""
+    # Use the specified presentation or the current one
+    pres_id = presentation_id if presentation_id is not None else current_presentation_id
+    
+    if pres_id is None or pres_id not in presentations:
+        return {
+            "error": "No presentation is currently loaded or the specified ID is invalid"
+        }
+    
+    pres = presentations[pres_id]
+    
+    # Check if slide index is valid
+    if slide_index < 0 or slide_index >= len(pres.slides):
+        return {
+            "error": f"Invalid slide index: {slide_index}. Available slides: 0-{len(pres.slides) - 1}"
+        }
+    
+    slide = pres.slides[slide_index]
+    
+    try:
+        slide_data = ppt_utils.extract_all_text_from_slide(slide)
+        
+        elements = []
+        for element in slide_data["text_elements"]:
+            elements.append({
+                "element_index": element["shape_index"],
+                "shape_name": element["shape_name"],
+                "shape_type": element["shape_type"],
+                "text_content": element["text_content"],
+                "placeholder_type": element.get("placeholder_type"),
+                "character_count": len(element["text_content"]) if element["text_content"] else 0
+            })
+        
+        return {
+            "slide_index": slide_index,
+            "total_elements": len(elements),
+            "translatable_elements": elements,
+            "slide_context": "\n".join([f"Element {e['element_index']}: {e['text_content']}" for e in elements])
+        }
+    except Exception as e:
+        return {
+            "error": f"Failed to list slide elements: {str(e)}"
+        }
+
 # ---- Main Execution ----
 def main():
     # Run the FastMCP server
